@@ -38,6 +38,7 @@ ve.ui.MWCategoryInputWidget = function VeUiMWCategoryInputWidget( categoryWidget
 	// Initialization
 	this.$element.addClass( 've-ui-mwCategoryInputWidget' );
 	this.lookupMenu.$element.addClass( 've-ui-mwCategoryInputWidget-menu' );
+	this.categoryRedirects = [];
 };
 
 /* Inheritance */
@@ -67,7 +68,8 @@ ve.ui.MWCategoryInputWidget.prototype.getLookupRequest = function () {
 			'action': 'query',
 			'prop': 'pageprops',
 			'titles': ( data[1] || [] ).join( '|' ),
-			'ppprop': 'hiddencat'
+			'ppprop': 'hiddencat',
+			'redirects': ''
 		} );
 		return propsJqXhr;
 	} ).promise( { abort: function () {
@@ -86,17 +88,30 @@ ve.ui.MWCategoryInputWidget.prototype.getLookupRequest = function () {
  * @param {Mixed} data Response from server
  */
 ve.ui.MWCategoryInputWidget.prototype.getLookupCacheItemFromData = function ( data ) {
-	var categoryWidget = this.categoryWidget, result = {};
+	var categoryInputWidget = this, result = {};
 	if ( data.query && data.query.pages ) {
 		$.each( data.query.pages, function ( pageId, pageInfo ) {
 			var title = mw.Title.newFromText( pageInfo.title );
 			if ( title ) {
 				result[title.getMainText()] = !!( pageInfo.pageprops && pageInfo.pageprops.hiddencat !== undefined );
-				categoryWidget.categoryHiddenStatus[pageInfo.title] = result[title.getMainText()];
+				categoryInputWidget.categoryWidget.categoryHiddenStatus[pageInfo.title] = result[title.getMainText()];
 			} else {
 				mw.log.warning( '"' + pageInfo.title + '" is an invalid title!' );
 			}
 		} );
+	}
+	if ( data.query && data.query.redirects ) {
+		$.each( data.query.redirects, function ( index, redirectInfo ) {
+			if (
+				categoryInputWidget.categoryRedirects.hasOwnProperty( this.to ) &&
+				categoryInputWidget.categoryRedirects[this.to].indexOf( this.from ) === -1
+			) {
+				categoryInputWidget.categoryRedirects[this.to].push( this.from );
+			} else {
+				categoryInputWidget.categoryRedirects[this.to] = [this.from];
+			}
+		} );
+
 	}
 	return result;
 };
@@ -119,7 +134,11 @@ ve.ui.MWCategoryInputWidget.prototype.getLookupMenuItemsFromData = function ( da
 		category = this.getCategoryItemFromValue( this.value ),
 		existingCategories = this.categoryWidget.getCategories(),
 		matchingCategories = [],
-		hiddenCategories = [];
+		hiddenCategories = [],
+		itemTitle,
+		searchForQueryWithinRedirectInfo = function ( element ) {
+			return element.lastIndexOf( new mw.Title( 'Category:' + category.value ).getPrefixedText(), 0 ) === 0;
+		};
 
 	$.each( data, function ( title, hiddenStatus ) {
 		if ( hiddenStatus ) {
@@ -133,21 +152,37 @@ ve.ui.MWCategoryInputWidget.prototype.getLookupMenuItemsFromData = function ( da
 	for ( i = 0, len = existingCategories.length - 1; i < len; i++ ) {
 		item = existingCategories[i];
 		// Verify that item starts with category.value
-		if ( item.lastIndexOf( category.value, 0 ) === 0 ) {
-			if ( item === category.value ) {
+		if (
+			item.lastIndexOf( category.value, 0 ) === 0 || (
+				this.categoryRedirects[itemTitle] !== undefined &&
+				$.grep( this.categoryRedirects[itemTitle], searchForQueryWithinRedirectInfo ).length
+			)
+		) {
+			if ( ( item === category.value ) || (
+				this.categoryRedirects[itemTitle] !== undefined &&
+				this.categoryRedirects[itemTitle].indexOf( new mw.Title( 'Category:' + category.value ).getPrefixedText() ) !== -1
+			) ) {
 				exactMatch = true;
 			}
 			existingCategoryItems.push( item );
 		}
 	}
+
 	// Matching categories
 	for ( i = 0, len = matchingCategories.length; i < len; i++ ) {
 		item = matchingCategories[i];
+		itemTitle = new mw.Title( 'Category:' + item ).getPrefixedText();
 		if (
 			ve.indexOf( item, existingCategories ) === -1 &&
-			item.lastIndexOf( category.value, 0 ) === 0
+			item.lastIndexOf( category.value, 0 ) === 0 || (
+				this.categoryRedirects[itemTitle] !== undefined &&
+				$.grep( this.categoryRedirects[itemTitle], searchForQueryWithinRedirectInfo ).length
+			)
 		) {
-			if ( item === category.value ) {
+			if ( ( item === category.value ) || (
+				this.categoryRedirects[itemTitle] !== undefined &&
+				this.categoryRedirects[itemTitle].indexOf( new mw.Title( 'Category:' + category.value ).getPrefixedText() ) !== -1
+			) ) {
 				exactMatch = true;
 			}
 			matchingCategoryItems.push( item );
@@ -156,16 +191,24 @@ ve.ui.MWCategoryInputWidget.prototype.getLookupMenuItemsFromData = function ( da
 	// Hidden categories
 	for ( i = 0, len = hiddenCategories.length; i < len; i++ ) {
 		item = hiddenCategories[i];
+		itemTitle = new mw.Title( 'Category:' + item ).getPrefixedText();
 		if (
 			ve.indexOf( item, existingCategories ) === -1 &&
-			item.lastIndexOf( category.value, 0 ) === 0
+			item.lastIndexOf( category.value, 0 ) === 0 || (
+				this.categoryRedirects[itemTitle] !== undefined &&
+				$.grep( this.categoryRedirects[itemTitle], searchForQueryWithinRedirectInfo ).length
+			)
 		) {
-			if ( item === category.value ) {
+			if ( ( item === category.value ) || (
+				this.categoryRedirects[itemTitle] !== undefined &&
+				this.categoryRedirects[itemTitle].indexOf( new mw.Title( 'Category:' + category.value ).getPrefixedText() ) !== -1
+			) ) {
 				exactMatch = true;
 			}
 			hiddenCategoryItems.push( item );
 		}
 	}
+
 	// New category
 	if ( !exactMatch ) {
 		newCategoryItems.push( category.value );
@@ -187,7 +230,9 @@ ve.ui.MWCategoryInputWidget.prototype.getLookupMenuItemsFromData = function ( da
 		) );
 		for ( i = 0, len = existingCategoryItems.length; i < len; i++ ) {
 			item = existingCategoryItems[i];
-			items.push( new OO.ui.MenuItemWidget( item, { '$': menu$, 'label': item } ) );
+			$.each( this.getMenuItemWidgetFromCategoryName( item, menu$ ), function () {
+				items.push( this );
+			} );
 		}
 	}
 	if ( matchingCategoryItems.length ) {
@@ -196,7 +241,9 @@ ve.ui.MWCategoryInputWidget.prototype.getLookupMenuItemsFromData = function ( da
 		) );
 		for ( i = 0, len = matchingCategoryItems.length; i < len; i++ ) {
 			item = matchingCategoryItems[i];
-			items.push( new OO.ui.MenuItemWidget( item, { '$': menu$, 'label': item } ) );
+			$.each( this.getMenuItemWidgetFromCategoryName( item, menu$ ), function () {
+				items.push( this );
+			} );
 		}
 	}
 	if ( hiddenCategoryItems.length ) {
@@ -205,11 +252,42 @@ ve.ui.MWCategoryInputWidget.prototype.getLookupMenuItemsFromData = function ( da
 		) );
 		for ( i = 0, len = hiddenCategoryItems.length; i < len; i++ ) {
 			item = hiddenCategoryItems[i];
-			items.push( new OO.ui.MenuItemWidget( item, { '$': menu$, 'label': item } ) );
+			$.each( this.getMenuItemWidgetFromCategoryName( item, menu$ ), function () {
+				items.push( this );
+			} );
 		}
 	}
 
 	return items;
+};
+
+/**
+ * Get a OO.ui.MenuSectionItemWidget object for a given category name.
+ * Deals with redirects.
+ *
+ * @method
+ * @param {string} item Category name
+ * @param {jQuery} menu$ Lookup menu jQuery
+ * @returns {OO.ui.MenuSectionItemWidget[]} Menu items
+ */
+ve.ui.MWCategoryInputWidget.prototype.getMenuItemWidgetFromCategoryName = function ( item, menu$ ) {
+	var itemTitle = new mw.Title( 'Category:' + item ).getPrefixedText(),
+		categoryInputWidget = this;
+
+	if ( this.categoryRedirects.hasOwnProperty( itemTitle ) ) {
+		return $.map( this.categoryRedirects[itemTitle], function ( redirectTitle ) {
+			return new OO.ui.MenuItemWidget( item, {
+				'$': menu$,
+				'autoFitLabel': false,
+				'label': categoryInputWidget.$( '<span>' )
+					.text( new mw.Title( redirectTitle ).getMainText() )
+					.append( '<br>↳ ' )
+					.append( $( '<span>' ).text( new mw.Title( item ).getMainText() ) )
+			} );
+		} );
+	} else {
+		return [new OO.ui.MenuItemWidget( item, { '$': menu$, 'label': item } )];
+	}
 };
 
 /**
